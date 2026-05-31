@@ -2,7 +2,7 @@
 
 A small 2D lattice Boltzmann solver (D2Q9, BGK collision) for flow past one
 or two circular cylinders in a rectangular channel. This is the starting
-point for the MATH-454 course project: profile it, then parallelize it.
+point for the MATH-454 course project. First, profile it, then parallelize it.
 
 ## Build
 
