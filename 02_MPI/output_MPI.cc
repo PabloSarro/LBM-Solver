@@ -1,5 +1,5 @@
-#include "output.hh"
-#include "lbm.hh"
+#include "output_MPI.hh"
+#include "lbm_MPI.hh"
 
 #include <hdf5.h>
 #include <sys/stat.h>
@@ -13,6 +13,9 @@
 #include <sstream>
 #include <vector>
 
+// FILE THAT POST-PROCESSES SIMULATION DATA:
+  // STORES STEP RESULTS
+  // VISUALISES SUCH RESULTS
 namespace {
 
 void

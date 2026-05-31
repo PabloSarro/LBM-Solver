@@ -1,4 +1,6 @@
-#include "lbm.hh"
+#include "lbm_MPI.hh"
+
+//  
 
 #include <algorithm>
 
@@ -8,30 +10,37 @@
 //   2: N            7: SW
 //   3: W            8: SE
 //   4: S
+
+// VELOCITIES
 const int LBM::cx[9] = { 0,  1,  0, -1,  0,  1, -1, -1,  1};
 const int LBM::cy[9] = { 0,  0,  1,  0, -1,  1,  1, -1, -1};
 
+// WEIGHTS FOR LOCAL EQUILIBRIUM: f_i^{eq}(rho, u)
 const double LBM::w[9] = {
   4.0 / 9.0,
   1.0 / 9.0,  1.0 / 9.0,  1.0 / 9.0,  1.0 / 9.0,
   1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
 };
 
+// INDICES OF OPPOSITE DIRECTIONS.
 const int LBM::opp[9] = {0, 3, 4, 1, 2, 7, 8, 5, 6};
 
+// CONSTRUCTOR: DEFINE STRUCTURES
 LBM::LBM(std::size_t nx, std::size_t ny,
          double u_in, double Re,
          double cyl_x, double cyl_y, double cyl_r)
-  : nx_(nx), ny_(ny), u_in_(u_in), tau_(0.0),
-    f_   (9 * nx * ny, 0.0),
+  : nx_(nx), ny_(ny), u_in_(u_in), tau_(0.0), // number of cells, velocity and relax. time
+    f_   (9 * nx * ny, 0.0), // flow distributions, set to zero initially.
     ftmp_(9 * nx * ny, 0.0),
-    solid_(nx * ny, 0)
+    solid_(nx * ny, 0) // solid cells, set to zero (fluid) initially.
 {
-  // ν = c_s^2 (τ - 1/2) with c_s^2 = 1/3, and Re = u_in * D / ν.
-  const double nu = u_in_ * (2.0 * cyl_r) / Re;
+  // RELAXATION TIME: τ
+      // ν = c_s^2 (τ - 1/2) with c_s^2 = 1/3, and Re = u_in * D / ν.
+  const double nu = u_in_ * (2.0 * cyl_r) / Re; // D = diameter = 2 * radius.
   tau_ = 3.0 * nu + 0.5;
 
-  // No-slip top and bottom walls.
+  // DEFINE UPPER AND LOWER WALLS AS SOLID CELLS.
+      // No-slip top and bottom walls.
   for (std::size_t x = 0; x < nx_; ++x) {
     solid_[idx(x, 0)]        = 1;
     solid_[idx(x, ny_ - 1)]  = 1;
@@ -39,12 +48,14 @@ LBM::LBM(std::size_t nx, std::size_t ny,
   mark_obstacle(cyl_x, cyl_y, cyl_r);
 }
 
+// ADD SECOND OBSTACLE.
 void
 LBM::add_second_cylinder(double cyl2_x, double cyl2_y, double cyl2_r)
 {
-  if (cyl2_r > 0.0) mark_obstacle(cyl2_x, cyl2_y, cyl2_r);
+  if (cyl2_r > 0.0) mark_obstacle(cyl2_x, cyl2_y, cyl2_r); // mark the inside as solid cells.
 }
 
+// DEFINE CIRCULAR OBSTACLE, AND MARK THE INSIDE AS SOLID CELLS.
 void
 LBM::mark_obstacle(double c_x, double c_y, double r)
 {
@@ -53,29 +64,31 @@ LBM::mark_obstacle(double c_x, double c_y, double r)
     for (std::size_t x = 0; x < nx_; ++x) {
       const double dx = double(x) - c_x;
       const double dy = double(y) - c_y;
-      if (dx * dx + dy * dy <= r2) solid_[idx(x, y)] = 1;
+      if (dx * dx + dy * dy <= r2) solid_[idx(x, y)] = 1; // if inside circle, mark solid.
     }
   }
 }
 
+// INITIALISE INITIAL FLOW TO EQUILIBRIUM
 void
 LBM::initialize()
 {
   for (std::size_t y = 0; y < ny_; ++y) {
-    for (std::size_t x = 0; x < nx_; ++x) {
-      const double rho = 1.0;
-      const double ux  = solid_[idx(x, y)] ? 0.0 : u_in_;
-      const double uy  = 0.0;
+    for (std::size_t x = 0; x < nx_; ++x) { // for every cell:
+      const double rho = 1.0; // set initial uniform density.
+      const double ux  = solid_[idx(x, y)] ? 0.0 : u_in_; // set initial horizontal velocity: u_in in fluid, 0 in solid.
+      const double uy  = 0.0; // no vertical velocity.
       const double u2  = ux * ux + uy * uy;
-      for (int i = 0; i < Q; ++i) {
+      for (int i = 0; i < Q; ++i) { // for every direction in that cell,
         const double cu  = cx[i] * ux + cy[i] * uy;
-        const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
-        f_[fidx(i, x, y)] = feq;
+        const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2); // compute its eq. distribution,
+        f_[fidx(i, x, y)] = feq; // and set it as initial distribution.
       }
     }
   }
 }
 
+// PERFORM A STEP IN THE SIMULATION.
 void
 LBM::step()
 {
