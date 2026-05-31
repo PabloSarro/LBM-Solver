@@ -10,10 +10,10 @@ LD       := $(CXX)
 # "-L/lib" flags.
 HDF5_INC := $(if $(strip $(HDF5_ROOT)),-I$(HDF5_ROOT)/include)
 HDF5_LIB := $(if $(strip $(HDF5_ROOT)),-L$(HDF5_ROOT)/lib)
-CXXFLAGS += -O3 -Wall -Wextra -Werror -pedantic -std=c++11 $(HDF5_INC)
+CXXFLAGS += -O3 -g -Wall -Wextra -Werror -pedantic -std=c++11 $(HDF5_INC)
 LDFLAGS  += $(CXXFLAGS) $(HDF5_LIB) -lhdf5 -lm
 
-OBJS = main.o lbm.o output.o
+OBJS = main_MPI.o lbm_MPI.o output_MPI.o
 
 all: lbm
 

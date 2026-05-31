@@ -36,10 +36,13 @@ public:
    * @param cyl_x    Center of the (first) cylinder along x, in cell units.
    * @param cyl_y    Center of the (first) cylinder along y, in cell units.
    * @param cyl_r    Radius of the (first) cylinder, in cell units.
+   * @param rank     MPI rank of the current process.
+   * @param size     Total number of MPI processes.
    */
   LBM(std::size_t nx, std::size_t ny,
       double u_in, double Re,
-      double cyl_x, double cyl_y, double cyl_r);
+      double cyl_x, double cyl_y, double cyl_r,
+      int rank, int size);
 
   /// Add a second circular obstacle. No-op if r2 <= 0.
   void add_second_cylinder(double cyl2_x, double cyl2_y, double cyl2_r);
@@ -64,8 +67,8 @@ public:
   double      u_in() const { return u_in_; }
 
 private:
-  std::size_t idx (std::size_t x, std::size_t y)         const { return y * nx_ + x; }
-  std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * nx_ * ny_ + idx(x, y); }
+  std::size_t idx (std::size_t x, std::size_t y)         const { return y * (nx_local_+2) + x; }
+  std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * (nx_local_+2) * ny_ + idx(x, y); }
 
   void mark_obstacle (double c_x, double c_y, double r);
   void collide       ();
@@ -77,6 +80,10 @@ private:
   std::size_t nx_, ny_;
   double u_in_;
   double tau_;
+
+  // MPI added parameters.
+  std::size_t nx_local_;
+  int rank_, size_;
 
   std::vector<double>  f_;      ///< Current distributions, size 9*nx*ny.
   std::vector<double>  ftmp_;   ///< Scratch buffer for streaming.

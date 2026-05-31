@@ -3,3 +3,5 @@ EnvHPC/
 
 # Output results
 out/
+*.err
+*.job

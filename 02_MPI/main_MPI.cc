@@ -52,6 +52,13 @@ get_string(const Args & kv, const std::string & key, const std::string & def)
 int
 main(int argc, char ** argv)
 {
+  // Initialise MPI.
+  int rank, size;
+  MPI_Init(&argc, &argv);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+
   const Args kv = parse_args(argc, argv);
 
   // Grid + physics.
@@ -83,7 +90,7 @@ main(int argc, char ** argv)
                                           std::size_t(cx0 + 8.0 * cr0));
   const std::size_t py = get<std::size_t>(kv, "probe_y", std::size_t(cy0));
 
-  LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0);
+  LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0, rank, size); // Added rank and size for MPI partition.
   if (cr1 > 0.0) solver.add_second_cylinder(cx1, cy1, cr1);
   solver.initialize();
 
@@ -116,6 +123,7 @@ main(int argc, char ** argv)
     solver.step();
     probe << step << ',' << solver.ux(px, py) << ',' << solver.uy(px, py) << '\n';
     if (every > 0 && step % every == 0) {
+      // Only worker with rank=0!!
       writer.write_snapshot(solver, double(step));
       std::cout << "\r  step " << step << " / " << steps << std::flush;
     }

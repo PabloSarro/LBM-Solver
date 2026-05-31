@@ -1,0 +1,61 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 316K of event 'cycles:u'
+# Event count (approx.): 297944128233
+#
+# Children      Self  Command  Shared Object         Symbol                                                                                                   
+# ........  ........  .......  ....................  .........................................................................................................
+#
+    69.38%    69.36%  lbm      lbm                   [.] LBM::collide
+            |          
+            |--0.53%--0x3fa07654320fedc3
+            |          LBM::collide
+            |          
+             --0.53%--0x3fa07654320fedc5
+                       LBM::collide
+
+    28.54%    28.53%  lbm      lbm                   [.] LBM::stream
+            |
+            ---LBM::stream
+
+     1.72%     1.72%  lbm      lbm                   [.] LBM::bounce_back
+            |
+            ---LBM::bounce_back
+
+     0.53%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc3
+            |
+            ---0x3fa07654320fedc3
+               LBM::collide
+
+     0.53%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc5
+            |
+            ---0x3fa07654320fedc5
+               LBM::collide
+
+     0.27%     0.27%  lbm      lbm                   [.] LBM::apply_inlet
+     0.23%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedcb
+     0.05%     0.05%  lbm      lbm                   [.] LBM::step
+     0.03%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc7
+     0.03%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc9
+     0.03%     0.03%  lbm      [unknown]             [k] 0xffffffff99600fb7
+     0.01%     0.00%  lbm      [unknown]             [.] 0x00007ffe20023d50
+     0.01%     0.00%  lbm      libc.so.6             [.] __vfprintf_internal
+     0.01%     0.00%  lbm      libstdc++.so.6.0.29   [.] std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::~num_put
+     0.01%     0.00%  lbm      [unknown]             [.] 0x0000000000000002
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc1
+     0.01%     0.01%  lbm      libc.so.6             [.] __GI___printf_fp_l
+     0.01%     0.00%  lbm      libstdc++.so.6.0.29   [.] std::ostream::_M_insert<double>
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedbf
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc0
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc6
+     0.01%     0.01%  lbm      lbm                   [.] LBM::initialize
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fbc56789abcdf00
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fedc2
+     0.01%     0.00%  lbm      [unknown]             [.] 0x3fa07654320fece8
+
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#
