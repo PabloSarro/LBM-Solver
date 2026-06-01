@@ -111,46 +111,48 @@ XDMFWriter::XDMFWriter(const std::string & prefix, std::size_t nx, std::size_t n
   mkdir_p(parent_dir(prefix_));
 }
 
+
 void
 XDMFWriter::write_mask(const LBM & solver)
 {
-  std::vector<std::uint8_t> mask(nx_ * ny_);
-  for (std::size_t y = 0; y < ny_; ++y)
-    for (std::size_t x = 0; x < nx_; ++x)
-      mask[y * nx_ + x] = solver.is_solid(x, y) ? 1 : 0;
+  if (solver.rank() == 0) {
+      std::vector<std::uint8_t> mask(nx_ * ny_);
+      for (std::size_t y = 0; y < ny_; ++y) {
+        for (std::size_t x = 0; x < nx_; ++x) {
+          mask[y * nx_ + x] = solver.is_solid_global(x, y) ? 1 : 0;
+        }
+      }
 
-  write_h5_uint8(prefix_ + "_mask.h5", "solid", mask, nx_, ny_);
-  has_mask_ = true;
-  write_root_xdmf();
+      write_h5_uint8(prefix_ + "_mask.h5", "solid", mask, nx_, ny_);
+      has_mask_ = true;
+      write_root_xdmf();
+  }
 }
 
-void
-XDMFWriter::write_snapshot(const LBM & solver, double t)
+
+
+void XDMFWriter::write_snapshot(const LBM & solver, double t)
 {
-  const std::size_t step_idx = times_.size();
-  const std::string fname    = prefix_ + "_" + indexed_suffix(step_idx) + ".h5";
+  // Create empty vectors to hold the global data
+  std::vector<double> rho_v, ux_v, uy_v, vor_v;
+  
+  // ALL ranks execute this so they can send their local data to Rank 0
+  solver.gather_local_results(rho_v, ux_v, uy_v, vor_v);
 
-  std::vector<double> rho_v (nx_ * ny_);
-  std::vector<double> ux_v  (nx_ * ny_);
-  std::vector<double> uy_v  (nx_ * ny_);
-  std::vector<double> vor_v (nx_ * ny_);
-  for (std::size_t y = 0; y < ny_; ++y) {
-    for (std::size_t x = 0; x < nx_; ++x) {
-      const std::size_t k = y * nx_ + x;
-      rho_v[k] = solver.rho(x, y);
-      ux_v [k] = solver.ux (x, y);
-      uy_v [k] = solver.uy (x, y);
-      vor_v[k] = solver.vorticity(x, y);
-    }
+  // ONLY Rank 0 executes the actual HDF5 writing
+  if (solver.rank() == 0) {
+    const std::size_t step_idx = times_.size();
+    const std::string fname    = prefix_ + "_" + indexed_suffix(step_idx) + ".h5";
+
+    // The vectors are perfectly sized and sorted for the HDF5 writer
+    write_h5_double(fname, "rho",       rho_v, nx_, ny_, true);
+    write_h5_double(fname, "ux",        ux_v,  nx_, ny_, false);
+    write_h5_double(fname, "uy",        uy_v,  nx_, ny_, false);
+    write_h5_double(fname, "vorticity", vor_v, nx_, ny_, false);
+
+    times_.push_back(t);
+    write_root_xdmf();
   }
-
-  write_h5_double(fname, "rho",       rho_v, nx_, ny_, /*truncate=*/true);
-  write_h5_double(fname, "ux",        ux_v,  nx_, ny_, /*truncate=*/false);
-  write_h5_double(fname, "uy",        uy_v,  nx_, ny_, /*truncate=*/false);
-  write_h5_double(fname, "vorticity", vor_v, nx_, ny_, /*truncate=*/false);
-
-  times_.push_back(t);
-  write_root_xdmf();
 }
 
 void

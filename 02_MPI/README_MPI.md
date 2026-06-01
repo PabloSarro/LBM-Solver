@@ -1,41 +1,15 @@
 # LBM 2D — serial starter code
 
-A small 2D lattice Boltzmann solver (D2Q9, BGK collision) for flow past one
-or two circular cylinders in a rectangular channel. This is the starting
-point for the MATH-454 course project. First, profile it, then parallelize it.
+MPI approach for the ...
 
 ## Build
 
 ```bash
-# TODO[Davor]: confirm SCITAS module names.
-module load gcc hdf5
-make
+# Launch SCITAS modules.
+module load gcc hdf5 openmpi
+make all
 ```
 
-The Makefile uses `$HDF5_ROOT` for include and library paths. If you build
-locally, point it at your HDF5 installation, e.g. on macOS with Homebrew:
-
-```bash
-HDF5_ROOT=$(brew --prefix hdf5) make
-```
-
-### Local conda environment (optional)
-
-In your own machine, if you would rather not depend on system packages, a single conda
-environment can provide the C++ toolchain, HDF5, and all the Python
-packages used by the visualization scripts:
-
-```bash
-conda create -n phpc-lbm -c conda-forge python=3.13 \
-    cxx-compiler hdf5 h5py numpy matplotlib pyvista imageio
-conda activate phpc-lbm
-make
-```
-
-Activation sets `$CXX` to the conda compiler and adds the env's
-`include/` and `lib/` directories to its search path automatically, so
-plain `make` is enough — no `$HDF5_ROOT` needed. The `viz/` scripts then
-run against the same Python.
 
 ## Run
 
@@ -44,9 +18,11 @@ quick smoke test:
 
 ```bash
 mkdir -p out
-./lbm                                  # uses defaults (see table below)
-./lbm nx=400 ny=100 re=100 steps=20000 # explicit overrides
+srun -n N ./lbm_MPI                                 # uses defaults (see table below)
+srun -n N ./lbm nx=400 ny=100 re=100 steps=20000    # explicit overrides
 ```
+
+Where `N` is the number of MPI processes for the execution.
 
 Useful keys:
 

@@ -61,14 +61,25 @@ public:
   double vorticity(std::size_t x, std::size_t y) const;
   bool   is_solid (std::size_t x, std::size_t y) const;
 
-  std::size_t nx()   const { return nx_; }
-  std::size_t ny()   const { return ny_; }
+  // Getters.
+  std::size_t nx()       const { return nx_; }
+  std::size_t ny()       const { return ny_; }
+  std::size_t nx_local() const { return nx_local_; }
+  std::size_t nx_start() const { return nx_start_; }
+
   double      tau()  const { return tau_; }
   double      u_in() const { return u_in_; }
+  int         rank() const { return rank_; }
+
+  // Output.cc needed functions.
+  bool is_solid_global(std::size_t global_x, std::size_t y) const;
+  void gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux, 
+                            std::vector<double>& g_uy, std::vector<double>& g_vor) const;
 
 private:
-  std::size_t idx (std::size_t x, std::size_t y)         const { return y * (nx_local_+2) + x; }
-  std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * (nx_local_+2) * ny_ + idx(x, y); }
+  std::size_t solid_idx (std::size_t local_x, std::size_t y)  const { return y*nx_local_ + (local_x-1); } // Since for solid structure, I don't allocate any "extra space".
+  std::size_t cell_idx (std::size_t local_x, std::size_t y)   const { return y*(nx_local_+2) + local_x; } // However, here I add two extreme "redundant" cols, where I don't write to, but just read.
+  // std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * (nx_local_+2) * ny_ + cell_idx(x, y); }
 
   void mark_obstacle (double c_x, double c_y, double r);
   void collide       ();
@@ -82,12 +93,18 @@ private:
   double tau_;
 
   // MPI added parameters.
+  int rank_;
+  int size_;
   std::size_t nx_local_;
-  int rank_, size_;
+  std::size_t nx_start_;
 
   std::vector<double>  f_;      ///< Current distributions, size 9*nx*ny.
   std::vector<double>  ftmp_;   ///< Scratch buffer for streaming.
   std::vector<uint8_t> solid_;  ///< 0 = fluid, 1 = solid.  Size nx*ny.
+
+  // Store the added cylinders to the system.
+  struct Cylinder { double x, y, r; };
+  std::vector<Cylinder> cylinders_;
 };
 
 #endif  // LBM_HH

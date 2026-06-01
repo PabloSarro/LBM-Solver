@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <mpi.h>
 
 namespace {
 
@@ -68,9 +69,6 @@ main(int argc, char ** argv)
   const double      u_in  = get<double>     (kv, "u_in",  0.05);
   const std::size_t steps = get<std::size_t>(kv, "steps", 60000);
 
-  // Cylinder geometry. Defaults: at (nx/4, ny/2) with radius ny/40
-  // (i.e. cylinder diameter = ny/20, ~5% blockage). At Re = 100 this
-  // setup reproduces the classical Strouhal number St ~ 0.16.
   const double cx0 = get<double>(kv, "cyl_x", double(nx) * 0.25);
   const double cy0 = get<double>(kv, "cyl_y", double(ny) * 0.50);
   const double cr0 = get<double>(kv, "cyl_r", double(ny) * 0.025);
@@ -85,33 +83,38 @@ main(int argc, char ** argv)
   const std::string out_pref  = get_string(kv, "out", "out/lbm");
   const std::string probe_csv = get_string(kv, "probe", "probe.csv");
 
-  // Probe location: about 4 diameters downstream, on the cylinder centerline.
-  const std::size_t px = get<std::size_t>(kv, "probe_x",
-                                          std::size_t(cx0 + 8.0 * cr0));
+  // Probe location: note that now only 1 rank will "own" this cell! Corrected logic below
+  const std::size_t px = get<std::size_t>(kv, "probe_x", std::size_t(cx0 + 8.0 * cr0));
   const std::size_t py = get<std::size_t>(kv, "probe_y", std::size_t(cy0));
 
   LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0, rank, size); // Added rank and size for MPI partition.
   if (cr1 > 0.0) solver.add_second_cylinder(cx1, cy1, cr1);
   solver.initialize();
 
-  std::cout << "LBM 2D D2Q9 BGK\n"
-            << "  grid          : " << nx << " x " << ny << "\n"
-            << "  Re            : " << Re << "\n"
-            << "  u_in          : " << u_in << "\n"
-            << "  tau           : " << solver.tau() << "\n"
-            << "  cylinder      : (" << cx0 << ", " << cy0
-            << "), r = " << cr0 << "\n";
-  if (cr1 > 0.0)
-    std::cout << "  cylinder #2   : (" << cx1 << ", " << cy1
-              << "), r = " << cr1 << "\n";
-  std::cout << "  steps         : " << steps << "\n"
-            << "  output every  : " << every << " (0 = off)\n"
-            << "  output prefix : " << out_pref << "\n"
-            << "  probe at      : (" << px << ", " << py << ")\n"
-            << "  probe csv     : " << probe_csv << "\n";
+  if (rank == 0) {
+    std::cout << "LBM 2D D2Q9 BGK\n"
+              << "  grid          : " << nx << " x " << ny << "\n"
+              << "  Re            : " << Re << "\n"
+              << "  u_in          : " << u_in << "\n"
+              << "  tau           : " << solver.tau() << "\n"
+              << "  cylinder      : (" << cx0 << ", " << cy0
+              << "), r = " << cr0 << "\n";
+    if (cr1 > 0.0)
+      std::cout << "  cylinder #2   : (" << cx1 << ", " << cy1
+                << "), r = " << cr1 << "\n";
+    std::cout << "  steps         : " << steps << "\n"
+              << "  output every  : " << every << " (0 = off)\n"
+              << "  output prefix : " << out_pref << "\n"
+              << "  probe at      : (" << px << ", " << py << ")\n"
+              << "  probe csv     : " << probe_csv << "\n";
+    std::cout << "Launching simulation with " << size << " MPI processes.\n";
+  }
 
-  std::ofstream probe(probe_csv);
-  probe << "step,ux,uy\n";
+  std::ofstream probe;
+  if (rank == 0) {
+    probe.open(probe_csv);
+    probe << "step,ux,uy\n";
+  }
 
   XDMFWriter writer(out_pref, nx, ny);
   if (every > 0) writer.write_mask(solver);
@@ -121,18 +124,40 @@ main(int argc, char ** argv)
 
   for (std::size_t step = 1; step <= steps; ++step) {
     solver.step();
-    probe << step << ',' << solver.ux(px, py) << ',' << solver.uy(px, py) << '\n';
+
+    // Find local value, reduce to global on Rank 0
+    double local_probe[2] = {0.0, 0.0};
+    if (px >= solver.nx_start() && px < solver.nx_start() + solver.nx_local()) {
+        std::size_t local_px = px - solver.nx_start() + 1; // Map global px to local_x
+        local_probe[0] = solver.ux(local_px, py);
+        local_probe[1] = solver.uy(local_px, py);
+    }
+
+    double global_probe[2] = {0.0, 0.0};
+    MPI_Reduce(local_probe, global_probe, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+      probe << step << ',' << global_probe[0] << ',' << global_probe[1] << '\n';
+    }
+
     if (every > 0 && step % every == 0) {
-      // Only worker with rank=0!!
       writer.write_snapshot(solver, double(step));
-      std::cout << "\r  step " << step << " / " << steps << std::flush;
+      if (rank == 0) {
+        std::cout << "\r  step " << step << " / " << steps << std::flush;
+      }
     }
   }
-  if (every > 0) std::cout << "\n";
 
   const double dt    = std::chrono::duration<double>(clk::now() - t0).count();
   const double mlups = double(nx) * double(ny) * double(steps) / dt / 1.0e6;
-  std::cout << "Wall time : " << dt    << " s\n"
-            << "MLUPS     : " << mlups << "\n";
+  
+  if (rank == 0) {
+    if (every > 0) std::cout << "\n";
+    std::cout << "Wall time : " << dt    << " s\n"
+              << "MLUPS     : " << mlups << "\n";
+  }
+  
+  MPI_Finalize();
+
   return 0;
 }

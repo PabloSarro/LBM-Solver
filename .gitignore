@@ -5,3 +5,6 @@ EnvHPC/
 out/
 *.err
 *.job
+
+# Compiled codes and binaries
+*.o

@@ -3,6 +3,7 @@
 //  
 
 #include <algorithm>
+#include <mpi.h>
 
 // D2Q9 lattice constants. Indexing convention used throughout:
 //   0: rest         5: NE
@@ -35,11 +36,11 @@ LBM::LBM(std::size_t nx, std::size_t ny,
     rank_(rank), size_(size),                 // MPI rank and size.
     
     // Distribute the remainder of floor(nx/size) by giving 1 to the first nx%size workers.
-    nx_local_((nx / size) + (rank < int(nx % size) ? 1 : 0)),           // Number of cells in the x direction that each MPI worker will process (from 1 to nx_local).
-    
+    nx_local_((nx / size) + (rank < int(nx % size) ? 1 : 0)),        // Number of cells in the x direction that each MPI worker will process (from 1 to nx_local).
+    nx_start_((rank*(nx / size)) + std::min(rank, int(nx % size))),  // Also, store the (global) position where x starts per worker (used to globally access its position).
     f_   (9 * (nx_local_+2) * ny_, 0.0),      // Flow distributions stored per worker (+2, since we will include cols 0 and nx_local_+1 for computation in the extremes).
     ftmp_(9 * (nx_local_+2) * ny_, 0.0),
-    solid_(nx_local_*ny_, 0),                 // Solid cells (no need to allocate space for the extra cols, since we don't need them for the calculations).
+    solid_(nx_local_*ny_, 0)                  // Solid cells (no need to allocate space for the extra cols, since we don't need them for the calculations).
 {
   // RELAXATION TIME: τ
       // ν = c_s^2 (τ - 1/2) with c_s^2 = 1/3, and Re = u_in * D / ν.
@@ -47,18 +48,22 @@ LBM::LBM(std::size_t nx, std::size_t ny,
   tau_ = 3.0 * nu + 0.5;
 
   // DEFINE UPPER AND LOWER WALLS AS SOLID CELLS.
-  for (std::size_t local_x = 1; local_x < nx_local_+1; ++local_x) {
-    solid_[idx(local_x, 0)]      = 1;
-    solid_[idx(local_x, ny_-1)]  = 1;
+  for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
+    solid_[solid_idx(local_x, 0)]      = 1;
+    solid_[solid_idx(local_x, ny_-1)]  = 1;
   }
   mark_obstacle(cyl_x, cyl_y, cyl_r);
+  cylinders_.push_back({cyl_x, cyl_y, cyl_r}); // Store the placed cylinder position.
 }
 
 // ADD SECOND OBSTACLE.
 void
 LBM::add_second_cylinder(double cyl2_x, double cyl2_y, double cyl2_r)
 {
-  if (cyl2_r > 0.0) mark_obstacle(cyl2_x, cyl2_y, cyl2_r); // mark the inside as solid cells.
+  if (cyl2_r > 0.0) {
+    mark_obstacle(cyl2_x, cyl2_y, cyl2_r);
+    cylinders_.push_back({cyl2_x, cyl2_y, cyl2_r}); // Store the placed cylinder position.
+  }
 }
 
 // DEFINE CIRCULAR OBSTACLE, AND MARK THE INSIDE AS SOLID CELLS.
@@ -67,18 +72,12 @@ LBM::mark_obstacle(double c_x, double c_y, double r)
 {
   const double r2 = r * r;
   for (std::size_t y = 0; y < ny_; ++y) {
-    for (std::size_t local_x = 1; local_x < nx_local_+1; ++local_x) {
-      const double global_x;
-      if (rank_>=(nx_%size)) {
-        global_x = (nx_%size)*nx_local_ + (rank_ - (nx_%size) - 1)*nx_local_ + local_x;
-      } else {
-        global_x = (rank_-1)*nx_local + local_x;
-      }
-
+    for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
+      const double global_x = double(nx_start_) + double(local_x) - 1.0; // Since nx_start_ already represents the first position (adding e.g. local_x=1 adds an extra 1, which is corrected by the -1.0 at the end)
       const double dx = global_x - c_x;
       const double dy = double(y) - c_y;
       if (dx * dx + dy * dy <= r2) {
-        solid_[idx(local_x, y)] = 1; // if inside circle, mark solid.
+        solid_[solid_idx(local_x, y)] = 1; // if inside circle, mark solid.
       }
     }
   }
@@ -88,16 +87,18 @@ LBM::mark_obstacle(double c_x, double c_y, double r)
 void
 LBM::initialize()
 {
+  const std::size_t N = (nx_local_+2) * ny_;
   for (std::size_t y = 0; y < ny_; ++y) {
-    for (std::size_t local_x = 1; local_x < nx_local_+1; ++local_x) { // for every local cell:
+    for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) { // for every local cell:
+      const std::size_t k = cell_idx(local_x, y);
       const double rho = 1.0; // set initial uniform density.
-      const double ux  = solid_[idx(local_x, y)] ? 0.0 : u_in_; // set initial horizontal velocity: u_in in fluid, 0 in solid.
+      const double ux  = solid_[solid_idx(local_x, y)] ? 0.0 : u_in_; // set initial horizontal velocity: u_in in fluid, 0 in solid.
       const double uy  = 0.0; // no vertical velocity.
       const double u2  = ux * ux + uy * uy;
       for (int i = 0; i < Q; ++i) { // for every direction in that cell,
         const double cu  = cx[i] * ux + cy[i] * uy;
         const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2); // compute its eq. distribution,
-        f_[fidx(i, local_x, y)] = feq; // and set it as initial distribution.
+        f_[i*N + k] = feq; // and set it as initial distribution.
       }
     }
   }
@@ -120,22 +121,25 @@ LBM::collide()
   const std::size_t N = (nx_local_+2) * ny_;
   const double inv_tau = 1.0 / tau_;
 
-  for (std::size_t k = 0; k < N; ++k) {
-    double rho = 0.0, mx = 0.0, my = 0.0;
-    for (int i = 0; i < Q; ++i) {
-      const double fi = f_[i * N + k];
-      rho += fi;
-      mx  += cx[i] * fi;
-      my  += cy[i] * fi;
-    }
-    const double ux = (rho > 0.0) ? mx / rho : 0.0;
-    const double uy = (rho > 0.0) ? my / rho : 0.0;
-    const double u2 = ux * ux + uy * uy;
+  for (std::size_t y = 0; y < ny_; ++y) {
+    for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) { // Only fluid cells!
+      const std::size_t k = cell_idx(local_x, y);
+      double rho = 0.0, mx = 0.0, my = 0.0;
+      for (int i = 0; i < Q; ++i) {
+        const double fi = f_[i*N + k];
+        rho += fi;
+        mx  += cx[i] * fi;
+        my  += cy[i] * fi;
+      }
+      const double ux = (rho > 0.0) ? mx / rho : 0.0;
+      const double uy = (rho > 0.0) ? my / rho : 0.0;
+      const double u2 = ux * ux + uy * uy;
 
-    for (int i = 0; i < Q; ++i) {
-      const double cu  = cx[i] * ux + cy[i] * uy;
-      const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
-      f_[i * N + k] += -inv_tau * (f_[i * N + k] - feq);
+      for (int i = 0; i < Q; ++i) {
+        const double cu  = cx[i] * ux + cy[i] * uy;
+        const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+        f_[i*N + k] += -inv_tau * (f_[i*N + k] - feq);
+      }
     }
   }
 }
@@ -143,16 +147,16 @@ LBM::collide()
 void
 LBM::bounce_back()
 {
-  // Fullway bounce-back: in solid cells, swap each pair of opposite directions.
-  // Combined with subsequent streaming this reflects populations across the
-  // solid-fluid interface.
   const std::size_t N = (nx_local_+2) * ny_;
-  for (std::size_t k = 0; k < N; ++k) {
-    if (!solid_[k]) continue;
-    std::swap(f_[1 * N + k], f_[3 * N + k]);
-    std::swap(f_[2 * N + k], f_[4 * N + k]);
-    std::swap(f_[5 * N + k], f_[7 * N + k]);
-    std::swap(f_[6 * N + k], f_[8 * N + k]);
+  for (std::size_t y = 0; y < ny_; ++y) {
+    for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
+      const std::size_t k = cell_idx(local_x, y);
+      if (!solid_[solid_idx(local_x, y)]) continue;
+      std::swap(f_[1*N + k], f_[3*N + k]);
+      std::swap(f_[2*N + k], f_[4*N + k]);
+      std::swap(f_[5*N + k], f_[7*N + k]);
+      std::swap(f_[6*N + k], f_[8*N + k]);
+    }
   }
 }
 
@@ -164,8 +168,8 @@ LBM::stream()
   // Send the information from domain boundaries to neighbouring workers, and only in the relevant directions!
   // 1. Define the strided column datatype
   MPI_Datatype column_type;
-  // count = ny_, blocklength = 1, stride = nx_local_ + 2
-  MPI_Type_vector(ny_, 1, nx_local_ + 2, MPI_DOUBLE, &column_type);
+  // count = ny_, blocklength = 1, stride = nx_local_+2
+  MPI_Type_vector(ny_, 1, nx_local_+2, MPI_DOUBLE, &column_type);
   MPI_Type_commit(&column_type);
 
   int left_nbr  = (rank_ > 0) ? rank_ - 1 : MPI_PROC_NULL;
@@ -174,16 +178,16 @@ LBM::stream()
   // 2. Exchange left-moving populations (3, 6, 7)
   // Send column x=1 to left neighbor, receive column x=nx_local_+1 from right neighbor
   for (int i : {3, 6, 7}) {
-      MPI_Sendrecv(&f_[i * N + 1], 1, column_type, left_nbr, 0,
-                   &f_[i * N + nx_local_ + 1], 1, column_type, right_nbr, 0,
+      MPI_Sendrecv(&f_[i*N + 1], 1, column_type, left_nbr, 0,
+                   &f_[i*N + nx_local_+1], 1, column_type, right_nbr, 0,
                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   }
 
   // 3. Exchange right-moving populations (1, 5, 8)
   // Send column x=nx_local_ to right neighbor, receive column x=0 from left neighbor
   for (int i : {1, 5, 8}) {
-      MPI_Sendrecv(&f_[i * N + nx_local_], 1, column_type, right_nbr, 0,
-                   &f_[i * N + 0], 1, column_type, left_nbr, 0,
+      MPI_Sendrecv(&f_[i*N + nx_local_], 1, column_type, right_nbr, 0,
+                   &f_[i*N + 0], 1, column_type, left_nbr, 0,
                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   }
 
@@ -191,13 +195,13 @@ LBM::stream()
 
   for (int i = 0; i < Q; ++i) {
     for (std::size_t y = 0; y < ny_; ++y) {
-      for (std::size_t local_x = 1; local_x < nx_local_+1; ++local_x) {
+      for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
         const long sx = long(local_x) - cx[i];
         const long sy = long(y) - cy[i];
         if (sx >= 0 && sx < long(nx_) && sy >= 0 && sy < long(ny_)) {
-          ftmp_[i * N + idx(local_x, y)] = f_[i * N + idx(std::size_t(sx), std::size_t(sy))];
+          ftmp_[i*N + cell_idx(local_x, y)] = f_[i*N + cell_idx(std::size_t(sx), std::size_t(sy))];
         } else {
-          ftmp_[i * N + idx(local_x, y)] = f_[i * N + idx(local_x, y)];
+          ftmp_[i*N + cell_idx(local_x, y)] = f_[i*N + cell_idx(local_x, y)];
         }
       }
     }
@@ -208,18 +212,18 @@ LBM::stream()
 void
 LBM::apply_inlet()
 {
-  // Do we need to offset the x-access here? Only rank=0 is applying this, so rank*nx_local + 0 = 0.
+  // Apply inlet at the left edge (x=1, y=y)
   const std::size_t N = (nx_local_+2) * ny_;
-  const std::size_t x = 1;
+  const std::size_t x_first = 1;
   for (std::size_t y = 0; y < ny_; ++y) {
-    if (solid_[idx(x, y)]) continue;
+    if (solid_[solid_idx(x_first, y)]) continue;
     const double rho = 1.0;
     const double ux  = u_in_;
     const double uy  = 0.0;
     const double u2  = ux * ux + uy * uy;
     for (int i = 0; i < Q; ++i) {
       const double cu  = cx[i] * ux + cy[i] * uy;
-      f_[i * N + idx(x, y)] = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+      f_[i * N + cell_idx(x_first, y)] = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
     }
   }
 }
@@ -227,14 +231,14 @@ LBM::apply_inlet()
 void
 LBM::apply_outlet()
 {
-  // Here we don't need offset either, since it's the last rank and rank*nx_local + (nx_local-1) = nx-1?
+  // Apply outlet at the right edge (x=nx_local_, y=y) (nx_local_ corresponds to right lim, since only last rank will execute this, and nx_local_ corresponds to last column within its physical boundary).
   if (nx_ < 2) return;
   const std::size_t N  = (nx_local_+2) * ny_;
-  const std::size_t x  = nx_local_ + 1;
-  const std::size_t xs = nx_local_;
+  const std::size_t x_last = nx_local_;
+  const std::size_t x_sec_last = nx_local_ - 1;
   for (std::size_t y = 0; y < ny_; ++y) {
     for (int i = 0; i < Q; ++i) {
-      f_[i * N + idx(x, y)] = f_[i * N + idx(xs, y)];
+      f_[i*N + cell_idx(x_last, y)] = f_[i*N + cell_idx(x_sec_last, y)];
     }
   }
 }
@@ -244,7 +248,7 @@ LBM::rho(std::size_t x, std::size_t y) const
 {
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0;
-  for (int i = 0; i < Q; ++i) r += f_[i * N + idx(x, y)];
+  for (int i = 0; i < Q; ++i) r += f_[i*N + cell_idx(x, y)];
   return r;
 }
 
@@ -254,7 +258,7 @@ LBM::ux(std::size_t x, std::size_t y) const
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0, m = 0.0;
   for (int i = 0; i < Q; ++i) {
-    const double fi = f_[i * N + idx(x, y)];
+    const double fi = f_[i*N + cell_idx(x, y)];
     r += fi;
     m += cx[i] * fi;
   }
@@ -267,7 +271,7 @@ LBM::uy(std::size_t x, std::size_t y) const
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0, m = 0.0;
   for (int i = 0; i < Q; ++i) {
-    const double fi = f_[i * N + idx(x, y)];
+    const double fi = f_[i*N + cell_idx(x, y)];
     r += fi;
     m += cy[i] * fi;
   }
@@ -284,5 +288,92 @@ LBM::vorticity(std::size_t x, std::size_t y) const
 bool
 LBM::is_solid(std::size_t x, std::size_t y) const
 {
-  return solid_[idx(x, y)] != 0;
+  return solid_[solid_idx(x, y)] != 0;
+}
+
+
+// Function that gathers the data in a snapshot
+void
+LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux, 
+                          std::vector<double>& g_uy, std::vector<double>& g_vor) const 
+{
+    // Extract strictly local fluid data into 1D contiguous buffers
+    std::vector<double> l_rho(nx_local_*ny_), l_ux(nx_local_*ny_),
+                        l_uy(nx_local_*ny_), l_vor(nx_local_*ny_);
+    
+    for (std::size_t y = 0; y < ny_; ++y) {
+      for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
+        std::size_t buf_idx = y*nx_local_ + (local_x - 1);
+        l_rho[buf_idx] = rho(local_x, y);
+        l_ux[buf_idx]  = ux(local_x, y);
+        l_uy[buf_idx]  = uy(local_x, y);
+        l_vor[buf_idx] = vorticity(local_x, y);
+      }
+    }
+
+    // Calculate the size (counts) and offset (displs) for every rank
+    std::vector<int> counts(size_), displs(size_);
+    for (int p = 0; p < size_; ++p) {
+      int nx_loc_count = (nx_ / size_) + (p < int(nx_ % size_) ? 1 : 0); // Same logic as nx_local_
+      counts[p] = nx_loc_count * ny_;
+      displs[p] = (p == 0) ? 0 : displs[p - 1] + counts[p - 1];
+    }
+
+    // Allocate receive buffers ONLY on Rank 0
+    std::vector<double> recv_rho, recv_ux, recv_uy, recv_vor;
+    if (rank_ == 0) {
+      recv_rho.resize(nx_*ny_); 
+      recv_ux.resize(nx_*ny_);
+      recv_uy.resize(nx_*ny_);
+      recv_vor.resize(nx_*ny_);
+    }
+
+    // Gather the raw arrays across the network
+    MPI_Gatherv(l_rho.data(), counts[rank_], MPI_DOUBLE, recv_rho.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(l_ux.data(),  counts[rank_], MPI_DOUBLE, recv_ux.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(l_uy.data(),  counts[rank_], MPI_DOUBLE, recv_uy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(l_vor.data(), counts[rank_], MPI_DOUBLE, recv_vor.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    // Unpack the vertical data into a global grid (only on Rank 0).
+    if (rank_ == 0) {
+      g_rho.assign(nx_*ny_, 0.0);
+      g_ux.assign(nx_*ny_, 0.0);
+      g_uy.assign(nx_*ny_, 0.0);
+      g_vor.assign(nx_*ny_, 0.0);
+      
+      for (int p = 0; p < size_; ++p) {
+        int nx_loc_count = (nx_ / size_) + (p < int(nx_ % size_) ? 1 : 0);        // Same logic as nx_local_
+        int nx_loc_start = (p * (nx_ / size_)) + std::min(p, int(nx_ % size_)); // Same logic as nx_start_
+        int offset = displs[p];
+        
+        for (std::size_t y = 0; y < ny_; ++y) {
+          for (int x = 0; x < nx_loc_count; ++x) {
+            std::size_t global_idx = y*nx_ + (nx_loc_start + x);
+            std::size_t gathered_idx = offset + y*nx_loc_count + x;
+            
+            g_rho[global_idx] = recv_rho[gathered_idx];
+            g_ux[global_idx]  = recv_ux[gathered_idx];
+            g_uy[global_idx]  = recv_uy[gathered_idx];
+            g_vor[global_idx] = recv_vor[gathered_idx];
+          }
+        }
+    }
+  }
+}
+
+
+
+bool LBM::is_solid_global(std::size_t global_x, std::size_t y) const {
+  // Check top and bottom walls
+  if (y == 0 || y == ny_ - 1) return true;
+
+  // Check the (maximum two) stored cylinders
+  for (const auto& cyl : cylinders_) {
+    const double dx = double(global_x) - cyl.x;
+    const double dy = double(y) - cyl.y;
+    if (dx * dx + dy * dy <= cyl.r * cyl.r) {
+      return true;
+    }
+  }
+  return false;
 }
