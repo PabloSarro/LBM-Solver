@@ -5,6 +5,10 @@ EnvHPC/
 out/
 *.err
 *.job
+*.csv
 
 # Compiled codes and binaries
 *.o
+lbm
+lbm_MPI
+lbm_CUDA
