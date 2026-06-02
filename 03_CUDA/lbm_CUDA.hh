@@ -63,17 +63,20 @@ public:
   double      tau()  const { return tau_; }
   double      u_in() const { return u_in_; }
 
+  void download_to_host(); // Pulls the full grid back to CPU for HDF5 writing
+  void probe_velocity(std::size_t x, std::size_t y, double& out_ux, double& out_uy) const;
+
+  ~LBM(); // Added destructor for cudaFree
+
 private:
-  std::size_t idx (std::size_t x, std::size_t y)         const { return y * nx_ + x; }
-  std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * nx_ * ny_ + idx(x, y); }
+  std::size_t idx (std::size_t x, std::size_t y) const { return y * nx_ + x; }
+
+  double* f_d_;
+  double* ftmp_d_;
+  uint8_t* solid_d_;
 
   void mark_obstacle (double c_x, double c_y, double r);
-  void collide       ();
-  void bounce_back   ();
-  void stream        ();
-  void apply_inlet   ();
-  void apply_outlet  ();
-
+  
   std::size_t nx_, ny_;
   double u_in_;
   double tau_;

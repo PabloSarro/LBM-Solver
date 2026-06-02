@@ -114,8 +114,13 @@ main(int argc, char ** argv)
 
   for (std::size_t step = 1; step <= steps; ++step) {
     solver.step();
-    probe << step << ',' << solver.ux(px, py) << ',' << solver.uy(px, py) << '\n';
+    
+    double px_ux, px_uy;
+    solver.probe_velocity(px, py, px_ux, px_uy);
+    probe << step << ',' << px_ux << ',' << px_uy << '\n';
+    
     if (every > 0 && step % every == 0) {
+      solver.download_to_host(); // Sync the GPU to CPU memory
       writer.write_snapshot(solver, double(step));
       std::cout << "\r  step " << step << " / " << steps << std::flush;
     }

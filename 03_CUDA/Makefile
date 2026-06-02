@@ -1,32 +1,27 @@
-# TODO[Davor]: confirm SCITAS module names. Suggested:
-#   module load gcc hdf5
-# HDF5_ROOT must point at an HDF5 install that provides include/ and lib/.
+CXX 	 := nvcc
 
-CXX      ?= g++
-LD       := $(CXX)
-# Only inject HDF5 include/lib paths when $HDF5_ROOT is set. Inside an
-# activated conda env, the compiler driver already knows where HDF5 lives,
-# so leaving HDF5_ROOT empty is fine and avoids spurious "-I/include" /
-# "-L/lib" flags.
 HDF5_INC := $(if $(strip $(HDF5_ROOT)),-I$(HDF5_ROOT)/include)
 HDF5_LIB := $(if $(strip $(HDF5_ROOT)),-L$(HDF5_ROOT)/lib)
-CXXFLAGS += -O3 -Wall -Wextra -Werror -pedantic -std=c++11 $(HDF5_INC)
-LDFLAGS  += $(CXXFLAGS) $(HDF5_LIB) -lhdf5 -lm
+CXXFLAGS := -O3 -arch=sm_70 -std=c++14 $(HDF5_INC)
+LDFLAGS  := $(CXXFLAGS) $(HDF5_LIB) -lhdf5 -lm
 
-OBJS = main.o lbm.o output.o
+OBJS = main_CUDA.o lbm_CUDA.o output_CUDA.o
 
-all: lbm
+all: lbm_CUDA
 
-lbm: $(OBJS)
-	$(LD) -o $@ $(OBJS) $(LDFLAGS)
+lbm_CUDA: $(OBJS)
+	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
 
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
+%.o: %.cu
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
 clean:
-	rm -f lbm *.o *~
+	rm -f lbm_CUDA *.o
 
 distclean: clean
-	rm -rf out/ probe.csv *.gif
+	rm -rf lbm_CUDA *.o out/ probe.csv *.gif lbm_MPI_29*
 
 .PHONY: all clean distclean
