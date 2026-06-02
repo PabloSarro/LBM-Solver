@@ -5,6 +5,10 @@
 #include <cstdint>
 #include <vector>
 
+// ======================================================== //
+// ====================== lbm_MPI.hh ====================== //
+// ======================================================== //
+
 /**
  * @brief 2D Lattice Boltzmann solver, D2Q9 lattice with BGK collision.
  *
@@ -54,12 +58,12 @@ public:
   /// Advance the simulation by one time step.
   void step();
 
-  // Macroscopic accessors.
-  double rho      (std::size_t x, std::size_t y) const;
-  double ux       (std::size_t x, std::size_t y) const;
-  double uy       (std::size_t x, std::size_t y) const;
-  double vorticity(std::size_t x, std::size_t y) const;
-  bool   is_solid (std::size_t x, std::size_t y) const;
+  // Accessors.
+  double rho      (std::size_t local_x, std::size_t y) const;
+  double ux       (std::size_t local_x, std::size_t y) const;
+  double uy       (std::size_t local_x, std::size_t y) const;
+  // double vorticity(std::size_t local_x, std::size_t y) const;
+  // bool   is_solid (std::size_t x, std::size_t y) const;
 
   // Getters.
   std::size_t nx()       const { return nx_; }
@@ -84,6 +88,7 @@ private:
   void mark_obstacle (double c_x, double c_y, double r);
   void collide       ();
   void bounce_back   ();
+  void update_bounds ();
   void stream        ();
   void apply_inlet   ();
   void apply_outlet  ();

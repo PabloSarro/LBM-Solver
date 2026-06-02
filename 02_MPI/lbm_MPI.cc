@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <mpi.h>
 
+// ======================================================== //
+// ====================== lbm_MPI.cc ====================== //
+// ======================================================== //
+
 // D2Q9 lattice constants. Indexing convention used throughout:
 //   0: rest         5: NE
 //   1: E            6: NW
@@ -110,6 +114,7 @@ LBM::step()
 {
   collide();
   bounce_back();
+  update_bounds();
   stream();
   if (rank_ == 0) apply_inlet();
   if (rank_ == size_ - 1) apply_outlet();
@@ -161,47 +166,66 @@ LBM::bounce_back()
 }
 
 void
-LBM::stream()
+LBM::update_bounds()
 {
   // This was changed, so that every worker only computes on its local domain.
   const std::size_t N = (nx_local_+2) * ny_;
+  
   // Send the information from domain boundaries to neighbouring workers, and only in the relevant directions!
-  // 1. Define the strided column datatype
-  MPI_Datatype column_type;
-  // count = ny_, blocklength = 1, stride = nx_local_+2
-  MPI_Type_vector(ny_, 1, nx_local_+2, MPI_DOUBLE, &column_type);
-  MPI_Type_commit(&column_type);
+  MPI_Datatype column; // Define the column datatype to be sent.
+  MPI_Type_vector(ny_, 1, nx_local_+2, MPI_DOUBLE, &column);
+  MPI_Type_commit(&column);
 
-  int left_nbr  = (rank_ > 0) ? rank_ - 1 : MPI_PROC_NULL;
-  int right_nbr = (rank_ < size_ - 1) ? rank_ + 1 : MPI_PROC_NULL;
+  int left_nbr  = (rank_ > 0)       ? rank_-1 : MPI_PROC_NULL;
+  int right_nbr = (rank_ < size_-1) ? rank_+1 : MPI_PROC_NULL;
 
-  // 2. Exchange left-moving populations (3, 6, 7)
+  // Exchange left-moving populations (3, 6, 7)
   // Send column x=1 to left neighbor, receive column x=nx_local_+1 from right neighbor
-  for (int i : {3, 6, 7}) {
-      MPI_Sendrecv(&f_[i*N + 1], 1, column_type, left_nbr, 0,
-                   &f_[i*N + nx_local_+1], 1, column_type, right_nbr, 0,
-                   MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  for (int i : {3,6,7}) {
+    MPI_Sendrecv(
+      &f_[i*N + 1], 1, column, left_nbr, 0, 
+      &f_[i*N + nx_local_+1], 1, column, right_nbr, 0,
+      MPI_COMM_WORLD, MPI_STATUS_IGNORE
+    );
   }
-
-  // 3. Exchange right-moving populations (1, 5, 8)
+  
+  // Exchange right-moving populations (1, 5, 8)
   // Send column x=nx_local_ to right neighbor, receive column x=0 from left neighbor
-  for (int i : {1, 5, 8}) {
-      MPI_Sendrecv(&f_[i*N + nx_local_], 1, column_type, right_nbr, 0,
-                   &f_[i*N + 0], 1, column_type, left_nbr, 0,
-                   MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  for (int i : {1,5,8}) {
+    MPI_Sendrecv(
+      &f_[i*N + nx_local_], 1, column, right_nbr, i+Q,
+      &f_[i*N + 0], 1, column, left_nbr, i+Q,
+      MPI_COMM_WORLD, MPI_STATUS_IGNORE
+    );
   }
 
-  MPI_Type_free(&column_type);
+  MPI_Type_free(&column);
+}
+
+void
+LBM::stream()
+{
+  const std::size_t N = (nx_local_+2) * ny_;
+  std::fill(ftmp_.begin(), ftmp_.end(), 0.0); // CHANGE: necessary? Maybe slows doen for nothingg
 
   for (int i = 0; i < Q; ++i) {
     for (std::size_t y = 0; y < ny_; ++y) {
       for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
         const long sx = long(local_x) - cx[i];
         const long sy = long(y) - cy[i];
-        if (sx >= 0 && sx < long(nx_) && sy >= 0 && sy < long(ny_)) {
-          ftmp_[i*N + cell_idx(local_x, y)] = f_[i*N + cell_idx(std::size_t(sx), std::size_t(sy))];
-        } else {
+
+        // If the source is outside the domain:
+        if (
+          (sy < 0) ||                                  // below the lower wall,
+          (sy >= long(ny_)) ||                         // above the upper wall,
+          ((rank_ == 0)&&(sx < 1)) ||                  // at the left of the left most wall,
+          ((rank_ == size_-1)&&(sx > long(nx_local_))) // at the right of the right most wall,
+        ) {
+          // Ignore stream.
           ftmp_[i*N + cell_idx(local_x, y)] = f_[i*N + cell_idx(local_x, y)];
+        } else {
+          // Else, normal stream takes place.
+          ftmp_[i*N + cell_idx(local_x, y)] = f_[i*N + cell_idx(std::size_t(sx), std::size_t(sy))];
         }
       }
     }
@@ -223,7 +247,7 @@ LBM::apply_inlet()
     const double u2  = ux * ux + uy * uy;
     for (int i = 0; i < Q; ++i) {
       const double cu  = cx[i] * ux + cy[i] * uy;
-      f_[i * N + cell_idx(x_first, y)] = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+      f_[i*N + cell_idx(x_first, y)] = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
     }
   }
 }
@@ -244,21 +268,21 @@ LBM::apply_outlet()
 }
 
 double
-LBM::rho(std::size_t x, std::size_t y) const
+LBM::rho(std::size_t local_x, std::size_t y) const
 {
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0;
-  for (int i = 0; i < Q; ++i) r += f_[i*N + cell_idx(x, y)];
+  for (int i = 0; i < Q; ++i) r += f_[i*N + cell_idx(local_x, y)];
   return r;
 }
 
 double
-LBM::ux(std::size_t x, std::size_t y) const
+LBM::ux(std::size_t local_x, std::size_t y) const
 {
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0, m = 0.0;
   for (int i = 0; i < Q; ++i) {
-    const double fi = f_[i*N + cell_idx(x, y)];
+    const double fi = f_[i*N + cell_idx(local_x, y)];
     r += fi;
     m += cx[i] * fi;
   }
@@ -266,101 +290,24 @@ LBM::ux(std::size_t x, std::size_t y) const
 }
 
 double
-LBM::uy(std::size_t x, std::size_t y) const
+LBM::uy(std::size_t local_x, std::size_t y) const
 {
   const std::size_t N = (nx_local_+2) * ny_;
   double r = 0.0, m = 0.0;
   for (int i = 0; i < Q; ++i) {
-    const double fi = f_[i*N + cell_idx(x, y)];
+    const double fi = f_[i*N + cell_idx(local_x, y)];
     r += fi;
     m += cy[i] * fi;
   }
   return (r > 0.0) ? m / r : 0.0;
 }
 
-double
-LBM::vorticity(std::size_t x, std::size_t y) const
-{
-  if (x == 0 || x == nx_ - 1 || y == 0 || y == ny_ - 1) return 0.0;
-  return 0.5 * ((uy(x + 1, y) - uy(x - 1, y)) - (ux(x, y + 1) - ux(x, y - 1)));
-}
-
-bool
-LBM::is_solid(std::size_t x, std::size_t y) const
-{
-  return solid_[solid_idx(x, y)] != 0;
-}
-
-
-// Function that gathers the data in a snapshot
-void
-LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux, 
-                          std::vector<double>& g_uy, std::vector<double>& g_vor) const 
-{
-    // Extract strictly local fluid data into 1D contiguous buffers
-    std::vector<double> l_rho(nx_local_*ny_), l_ux(nx_local_*ny_),
-                        l_uy(nx_local_*ny_), l_vor(nx_local_*ny_);
-    
-    for (std::size_t y = 0; y < ny_; ++y) {
-      for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
-        std::size_t buf_idx = y*nx_local_ + (local_x - 1);
-        l_rho[buf_idx] = rho(local_x, y);
-        l_ux[buf_idx]  = ux(local_x, y);
-        l_uy[buf_idx]  = uy(local_x, y);
-        l_vor[buf_idx] = vorticity(local_x, y);
-      }
-    }
-
-    // Calculate the size (counts) and offset (displs) for every rank
-    std::vector<int> counts(size_), displs(size_);
-    for (int p = 0; p < size_; ++p) {
-      int nx_loc_count = (nx_ / size_) + (p < int(nx_ % size_) ? 1 : 0); // Same logic as nx_local_
-      counts[p] = nx_loc_count * ny_;
-      displs[p] = (p == 0) ? 0 : displs[p - 1] + counts[p - 1];
-    }
-
-    // Allocate receive buffers ONLY on Rank 0
-    std::vector<double> recv_rho, recv_ux, recv_uy, recv_vor;
-    if (rank_ == 0) {
-      recv_rho.resize(nx_*ny_); 
-      recv_ux.resize(nx_*ny_);
-      recv_uy.resize(nx_*ny_);
-      recv_vor.resize(nx_*ny_);
-    }
-
-    // Gather the raw arrays across the network
-    MPI_Gatherv(l_rho.data(), counts[rank_], MPI_DOUBLE, recv_rho.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Gatherv(l_ux.data(),  counts[rank_], MPI_DOUBLE, recv_ux.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Gatherv(l_uy.data(),  counts[rank_], MPI_DOUBLE, recv_uy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Gatherv(l_vor.data(), counts[rank_], MPI_DOUBLE, recv_vor.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-    // Unpack the vertical data into a global grid (only on Rank 0).
-    if (rank_ == 0) {
-      g_rho.assign(nx_*ny_, 0.0);
-      g_ux.assign(nx_*ny_, 0.0);
-      g_uy.assign(nx_*ny_, 0.0);
-      g_vor.assign(nx_*ny_, 0.0);
-      
-      for (int p = 0; p < size_; ++p) {
-        int nx_loc_count = (nx_ / size_) + (p < int(nx_ % size_) ? 1 : 0);        // Same logic as nx_local_
-        int nx_loc_start = (p * (nx_ / size_)) + std::min(p, int(nx_ % size_)); // Same logic as nx_start_
-        int offset = displs[p];
-        
-        for (std::size_t y = 0; y < ny_; ++y) {
-          for (int x = 0; x < nx_loc_count; ++x) {
-            std::size_t global_idx = y*nx_ + (nx_loc_start + x);
-            std::size_t gathered_idx = offset + y*nx_loc_count + x;
-            
-            g_rho[global_idx] = recv_rho[gathered_idx];
-            g_ux[global_idx]  = recv_ux[gathered_idx];
-            g_uy[global_idx]  = recv_uy[gathered_idx];
-            g_vor[global_idx] = recv_vor[gathered_idx];
-          }
-        }
-    }
-  }
-}
-
+// double
+// LBM::vorticity(std::size_t local_x, std::size_t y) const
+// {
+//   if (local_x == 0 || local_x == nx_local_+1 || y == 0 || y == ny_ - 1) return 0.0;
+//   return 0.5 * ((uy(local_x+1, y) - uy(local_x-1, y)) - (ux(local_x, y+1) - ux(local_x, y-1)));
+// }
 
 
 bool LBM::is_solid_global(std::size_t global_x, std::size_t y) const {
@@ -376,4 +323,87 @@ bool LBM::is_solid_global(std::size_t global_x, std::size_t y) const {
     }
   }
   return false;
+}
+
+
+// Function that gathers the data in a snapshot
+void
+LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux, 
+                          std::vector<double>& g_uy, std::vector<double>& g_vor) const 
+{
+  // Extract strictly local fluid data into 1D contiguous buffers
+  std::vector<double> l_rho(nx_local_*ny_), l_ux(nx_local_*ny_), l_uy(nx_local_*ny_);
+
+  for (std::size_t y = 0; y < ny_; ++y) {
+    for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
+      std::size_t glob_idx = y*nx_local_ + (local_x-1);
+      l_rho[glob_idx] = rho(local_x, y);
+      l_ux[glob_idx]  = ux(local_x, y);
+      l_uy[glob_idx]  = uy(local_x, y);
+    }
+  }
+
+  // Calculate the size (counts) and offset (displs) for every rank
+  std::vector<int> counts(size_), displs(size_);
+  for (int p = 0; p < size_; ++p) {
+    int nx_loc = (nx_ / size_) + (p < int(nx_%size_) ? 1 : 0); // Same logic as nx_local_
+    counts[p] = nx_loc * ny_;
+    displs[p] = (p == 0) ? 0 : displs[p-1] + counts[p-1];
+  }
+
+  // Allocate receive buffers ONLY on Rank 0
+  std::vector<double> recv_rho, recv_ux, recv_uy, recv_vor;
+  if (rank_ == 0) {
+    recv_rho.resize(nx_*ny_); 
+    recv_ux.resize(nx_*ny_);
+    recv_uy.resize(nx_*ny_);
+  }
+
+  // Gather the raw arrays across the network
+  MPI_Gatherv(l_rho.data(), counts[rank_], MPI_DOUBLE, recv_rho.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(l_ux.data(),  counts[rank_], MPI_DOUBLE, recv_ux.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(l_uy.data(),  counts[rank_], MPI_DOUBLE, recv_uy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+  // Unpack the vertical data into a global grid (only on Rank 0).
+  if (rank_ == 0) {
+    g_rho.assign(nx_*ny_, 0.0);
+    g_ux.assign(nx_*ny_, 0.0);
+    g_uy.assign(nx_*ny_, 0.0);
+    g_vor.assign(nx_*ny_, 0.0);
+    
+    for (int p = 0; p < size_; ++p) {
+      int nx_loc = (nx_ / size_) + (p < int(nx_ % size_) ? 1 : 0);        // Same logic as nx_local_
+      int nx_loc_start = (p*(nx_ / size_)) + std::min(p, int(nx_ % size_)); // Same logic as nx_start_
+      int offset = displs[p];
+      
+      for (std::size_t y = 0; y < ny_; ++y) {
+        for (int x = 0; x < nx_loc; ++x) {
+          std::size_t glob_idx = y*nx_ + (nx_loc_start + x);
+          std::size_t gath_idx = offset + y*nx_loc + x;
+          
+          g_rho[glob_idx] = recv_rho[gath_idx];
+          g_ux[glob_idx]  = recv_ux[gath_idx];
+          g_uy[glob_idx]  = recv_uy[gath_idx];
+        }
+      }
+    }
+
+    // Compute vorticity using continuous macroscopic arrays
+    for (std::size_t y = 0; y < ny_; ++y) {
+      for (std::size_t x = 0; x < nx_; ++x) {
+        std::size_t idx = y*nx_ + x;
+        
+        if (x == 0 || x == nx_ - 1 || y == 0 || y == ny_ - 1) {
+          g_vor[idx] = 0.0;
+        } else {
+          double uy_right = g_uy[idx+1]; // Right element (x --> x+1)
+          double uy_left  = g_uy[idx-1]; // Left element (x --> x-1)
+          double ux_up    = g_ux[idx+nx_]; // Upper element (y --> y+1)
+          double ux_down  = g_ux[idx-nx_]; // Lower element (y --> y-1)
+            
+          g_vor[idx] = 0.5 * ((uy_right-uy_left) - (ux_up-ux_down));
+        }
+      }
+    }
+  }
 }

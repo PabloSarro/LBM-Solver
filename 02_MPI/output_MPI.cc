@@ -13,9 +13,10 @@
 #include <sstream>
 #include <vector>
 
-// FILE THAT POST-PROCESSES SIMULATION DATA:
-  // STORES STEP RESULTS
-  // VISUALISES SUCH RESULTS
+// ======================================================== //
+// ==================== output_MPI.cc ===================== //
+// ======================================================== //
+
 namespace {
 
 void
