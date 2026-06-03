@@ -48,9 +48,11 @@ __constant__ int opp_dev[9] = {0, 3, 4, 1, 2, 7, 8, 5, 6};
 
 // CONSTRUCTOR.
 LBM::LBM(std::size_t nx, std::size_t ny,
+         int block_x, int block_y, 
          double u_in, double Re,
          double cyl_x, double cyl_y, double cyl_r): 
-    nx_(nx), ny_(ny), u_in_(u_in), tau_(0.0),
+    nx_(nx), ny_(ny), block_x_(block_x), block_y_(block_y),
+    u_in_(u_in), tau_(0.0),
     f_   (9*nx_*ny_, 0.0),
     ftmp_(9*nx_*ny_, 0.0),
     solid_(nx_*ny_, 0)
@@ -179,7 +181,7 @@ __global__ void lbm_boundaries_kernel(double* __restrict__ ftmp,
 void
 LBM::mark_obstacle(double c_x, double c_y, double r)
 {
-  const double r2 = r * r;
+  const double r2 = r*r;
   for (std::size_t y = 0; y < ny_; ++y) {
     for (std::size_t x = 0; x < nx_; ++x) {
       const double dx = double(x) - c_x;
@@ -205,9 +207,9 @@ void LBM::initialize() {
       const double rho = 1.0; 
       const double ux  = solid_[idx(x,y)] ? 0.0 : u_in_; 
       const double uy  = 0.0; 
-      const double u2  = ux * ux + uy * uy;
+      const double u2  = ux*ux + uy*uy;
       for (int i = 0; i < 9; ++i) { 
-        const double cu  = cx[i]*ux + cy[i] * uy;
+        const double cu  = cx[i]*ux + cy[i]*uy;
         f_[i*nx_*ny_ + idx(x,y)] = w[i]*rho*(1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2); 
       }
     }
@@ -220,8 +222,8 @@ void LBM::initialize() {
 
 
 void LBM::step() {
-  dim3 threads(32, 8);
-  dim3 blocks((nx_ + 31) / 32, (ny_ + 7) / 8);
+  dim3 threads(block_x_, block_y_);
+  dim3 blocks((nx_ + block_x_-1) / block_x_, (ny_ + block_y_-1) / block_y_);
 
   // 1. Core Physics
   lbm_fused_kernel<<<blocks, threads>>>(f_d_, ftmp_d_, solid_d_, nx_, ny_, 1.0/tau_);

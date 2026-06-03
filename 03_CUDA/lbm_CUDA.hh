@@ -31,13 +31,16 @@ public:
   /**
    * @param nx       Number of cells along x.
    * @param ny       Number of cells along y.
+   * @param block_x  Number of threads within a TB in the x dimension.
+   * @param block_y  Number of threads within a TB in the y dimension.
    * @param u_in     Inlet velocity in lattice units (must be << 1/sqrt(3)).
    * @param Re       Target Reynolds number, based on cylinder diameter.
    * @param cyl_x    Center of the (first) cylinder along x, in cell units.
    * @param cyl_y    Center of the (first) cylinder along y, in cell units.
    * @param cyl_r    Radius of the (first) cylinder, in cell units.
    */
-  LBM(std::size_t nx, std::size_t ny,
+  LBM(std::size_t nx, std::size_t ny, 
+      int block_x, int block_y,
       double u_in, double Re,
       double cyl_x, double cyl_y, double cyl_r);
 
@@ -60,6 +63,8 @@ public:
 
   std::size_t nx()   const { return nx_; }
   std::size_t ny()   const { return ny_; }
+  int      block_x() const { return block_x_; }
+  int      block_y() const { return block_y_; }
   double      tau()  const { return tau_; }
   double      u_in() const { return u_in_; }
 
@@ -69,7 +74,7 @@ public:
   ~LBM(); // Added destructor for cudaFree
 
 private:
-  std::size_t idx (std::size_t x, std::size_t y) const { return y * nx_ + x; }
+  std::size_t idx (std::size_t x, std::size_t y) const { return y*nx_ + x; }
 
   double* f_d_;
   double* ftmp_d_;
@@ -78,6 +83,7 @@ private:
   void mark_obstacle (double c_x, double c_y, double r);
   
   std::size_t nx_, ny_;
+  int block_x_, block_y_;
   double u_in_;
   double tau_;
 

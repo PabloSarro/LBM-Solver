@@ -61,6 +61,10 @@ main(int argc, char ** argv)
   const double      u_in  = get<double>     (kv, "u_in",  0.05);
   const std::size_t steps = get<std::size_t>(kv, "steps", 60000);
 
+  // Block configuration.
+  const int block_x = get<int>(kv, "block_x", 32);
+  const int block_y = get<int>(kv, "block_y", 8);
+
   // Cylinder geometry. Defaults: at (nx/4, ny/2) with radius ny/40
   // (i.e. cylinder diameter = ny/20, ~5% blockage). At Re = 100 this
   // setup reproduces the classical Strouhal number St ~ 0.16.
@@ -83,12 +87,13 @@ main(int argc, char ** argv)
                                           std::size_t(cx0 + 8.0 * cr0));
   const std::size_t py = get<std::size_t>(kv, "probe_y", std::size_t(cy0));
 
-  LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0);
+  LBM solver(nx, ny, block_x, block_y, u_in, Re, cx0, cy0, cr0);
   if (cr1 > 0.0) solver.add_second_cylinder(cx1, cy1, cr1);
   solver.initialize();
 
   std::cout << "LBM 2D D2Q9 BGK\n"
             << "  grid          : " << nx << " x " << ny << "\n"
+            << "  block         : " << block_x << " x " << block_y << "\n"
             << "  Re            : " << Re << "\n"
             << "  u_in          : " << u_in << "\n"
             << "  tau           : " << solver.tau() << "\n"
