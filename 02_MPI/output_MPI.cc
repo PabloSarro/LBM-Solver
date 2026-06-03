@@ -120,7 +120,7 @@ XDMFWriter::write_mask(const LBM & solver)
       std::vector<std::uint8_t> mask(nx_ * ny_);
       for (std::size_t y = 0; y < ny_; ++y) {
         for (std::size_t x = 0; x < nx_; ++x) {
-          mask[y * nx_ + x] = solver.is_solid_global(x, y) ? 1 : 0;
+          mask[y*nx_ + x] = solver.is_solid_global(x, y) ? 1 : 0;
         }
       }
 

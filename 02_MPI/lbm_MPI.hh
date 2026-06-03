@@ -30,7 +30,6 @@ public:
   static const int    cx[Q];   ///< Discrete velocity x-components.
   static const int    cy[Q];   ///< Discrete velocity y-components.
   static const double w[Q];    ///< Equilibrium weights.
-  static const int    opp[Q];  ///< Index of the opposite direction.
 
   /**
    * @param nx       Number of cells along x.
@@ -43,6 +42,7 @@ public:
    * @param rank     MPI rank of the current process.
    * @param size     Total number of MPI processes.
    */
+
   LBM(std::size_t nx, std::size_t ny,
       double u_in, double Re,
       double cyl_x, double cyl_y, double cyl_r,
@@ -62,8 +62,6 @@ public:
   double rho      (std::size_t local_x, std::size_t y) const;
   double ux       (std::size_t local_x, std::size_t y) const;
   double uy       (std::size_t local_x, std::size_t y) const;
-  // double vorticity(std::size_t local_x, std::size_t y) const;
-  // bool   is_solid (std::size_t x, std::size_t y) const;
 
   // Getters.
   std::size_t nx()       const { return nx_; }
@@ -83,7 +81,6 @@ public:
 private:
   std::size_t solid_idx (std::size_t local_x, std::size_t y)  const { return y*nx_local_ + (local_x-1); } // Since for solid structure, I don't allocate any "extra space".
   std::size_t cell_idx (std::size_t local_x, std::size_t y)   const { return y*(nx_local_+2) + local_x; } // However, here I add two extreme "redundant" cols, where I don't write to, but just read.
-  // std::size_t fidx(int i, std::size_t x, std::size_t y)  const { return i * (nx_local_+2) * ny_ + cell_idx(x, y); }
 
   void mark_obstacle (double c_x, double c_y, double r);
   void collide       ();

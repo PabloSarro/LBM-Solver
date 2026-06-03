@@ -52,7 +52,7 @@ get_string(const Args & kv, const std::string & key, const std::string & def)
   return (it == kv.end()) ? def : it->second;
 }
 
-}  // namespace
+}
 
 int
 main(int argc, char ** argv)
@@ -91,7 +91,7 @@ main(int argc, char ** argv)
   const std::size_t px = get<std::size_t>(kv, "probe_x", std::size_t(cx0 + 8.0 * cr0));
   const std::size_t py = get<std::size_t>(kv, "probe_y", std::size_t(cy0));
 
-  LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0, rank, size); // Added rank and size for MPI partition.
+  LBM solver(nx, ny, u_in, Re, cx0, cy0, cr0, rank, size); // Added rank and size for MPI.
   if (cr1 > 0.0) solver.add_second_cylinder(cx1, cy1, cr1);
   solver.initialize();
 
@@ -129,7 +129,7 @@ main(int argc, char ** argv)
   for (std::size_t step = 1; step <= steps; ++step) {
     solver.step();
 
-    // Find local value, reduce to global on Rank 0
+    // Now we need to find which MPI process contains the (px,py) value, and reduce info on probe to Rank 0
     double local_probe[2] = {0.0, 0.0};
     if (px >= solver.nx_start() && px < solver.nx_start() + solver.nx_local()) {
         std::size_t local_px = px - solver.nx_start() + 1; // Map global px to local_x

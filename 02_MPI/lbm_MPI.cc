@@ -27,9 +27,6 @@ const double LBM::w[9] = {
   1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
 };
 
-// INDICES OF OPPOSITE DIRECTIONS.
-const int LBM::opp[9] = {0, 3, 4, 1, 2, 7, 8, 5, 6};
-
 
 // CONSTRUCTOR.
 LBM::LBM(std::size_t nx, std::size_t ny,
@@ -46,9 +43,8 @@ LBM::LBM(std::size_t nx, std::size_t ny,
     ftmp_(9 * (nx_local_+2) * ny_, 0.0),
     solid_(nx_local_*ny_, 0)                  // Solid cells (no need to allocate space for the extra cols, since we don't need them for the calculations).
 {
-  // RELAXATION TIME: τ
-      // ν = c_s^2 (τ - 1/2) with c_s^2 = 1/3, and Re = u_in * D / ν.
-  const double nu = u_in_ * (2.0 * cyl_r) / Re; // D = diameter = 2 * radius.
+
+  const double nu = u_in_ * (2.0 * cyl_r) / Re;
   tau_ = 3.0 * nu + 0.5;
 
   // DEFINE UPPER AND LOWER WALLS AS SOLID CELLS.
@@ -87,7 +83,7 @@ LBM::mark_obstacle(double c_x, double c_y, double r)
   }
 }
 
-// INITIALISE INITIAL FLOW TO EQUILIBRIUM
+
 void
 LBM::initialize()
 {
@@ -117,7 +113,7 @@ LBM::step()
   update_bounds();
   stream();
   if (rank_ == 0) apply_inlet();
-  if (rank_ == size_ - 1) apply_outlet();
+  if (rank_ == size_-1) apply_outlet();
 }
 
 void
@@ -133,16 +129,16 @@ LBM::collide()
       for (int i = 0; i < Q; ++i) {
         const double fi = f_[i*N + k];
         rho += fi;
-        mx  += cx[i] * fi;
-        my  += cy[i] * fi;
+        mx  += cx[i]*fi;
+        my  += cy[i]*fi;
       }
       const double ux = (rho > 0.0) ? mx / rho : 0.0;
       const double uy = (rho > 0.0) ? my / rho : 0.0;
-      const double u2 = ux * ux + uy * uy;
+      const double u2 = ux*ux + uy*uy;
 
       for (int i = 0; i < Q; ++i) {
-        const double cu  = cx[i] * ux + cy[i] * uy;
-        const double feq = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+        const double cu  = cx[i]*ux + cy[i]*uy;
+        const double feq = w[i]*rho*(1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2);
         f_[i*N + k] += -inv_tau * (f_[i*N + k] - feq);
       }
     }
@@ -193,8 +189,8 @@ LBM::update_bounds()
   // Send column x=nx_local_ to right neighbor, receive column x=0 from left neighbor
   for (int i : {1,5,8}) {
     MPI_Sendrecv(
-      &f_[i*N + nx_local_], 1, column, right_nbr, i+Q,
-      &f_[i*N + 0], 1, column, left_nbr, i+Q,
+      &f_[i*N + nx_local_], 1, column, right_nbr, 1,
+      &f_[i*N + 0], 1, column, left_nbr, 1,
       MPI_COMM_WORLD, MPI_STATUS_IGNORE
     );
   }
@@ -206,7 +202,6 @@ void
 LBM::stream()
 {
   const std::size_t N = (nx_local_+2) * ny_;
-  std::fill(ftmp_.begin(), ftmp_.end(), 0.0); // CHANGE: necessary? Maybe slows doen for nothingg
 
   for (int i = 0; i < Q; ++i) {
     for (std::size_t y = 0; y < ny_; ++y) {
@@ -244,10 +239,10 @@ LBM::apply_inlet()
     const double rho = 1.0;
     const double ux  = u_in_;
     const double uy  = 0.0;
-    const double u2  = ux * ux + uy * uy;
+    const double u2  = ux*ux + uy*uy;
     for (int i = 0; i < Q; ++i) {
-      const double cu  = cx[i] * ux + cy[i] * uy;
-      f_[i*N + cell_idx(x_first, y)] = w[i] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+      const double cu  = cx[i]*ux + cy[i]*uy;
+      f_[i*N + cell_idx(x_first, y)] = w[i]*rho*(1.0 + 3.0*cu + 4.5*cu*cu - 1.5*u2);
     }
   }
 }
@@ -259,7 +254,7 @@ LBM::apply_outlet()
   if (nx_ < 2) return;
   const std::size_t N  = (nx_local_+2) * ny_;
   const std::size_t x_last = nx_local_;
-  const std::size_t x_sec_last = nx_local_ - 1;
+  const std::size_t x_sec_last = nx_local_-1;
   for (std::size_t y = 0; y < ny_; ++y) {
     for (int i = 0; i < Q; ++i) {
       f_[i*N + cell_idx(x_last, y)] = f_[i*N + cell_idx(x_sec_last, y)];
@@ -284,7 +279,7 @@ LBM::ux(std::size_t local_x, std::size_t y) const
   for (int i = 0; i < Q; ++i) {
     const double fi = f_[i*N + cell_idx(local_x, y)];
     r += fi;
-    m += cx[i] * fi;
+    m += cx[i]*fi;
   }
   return (r > 0.0) ? m / r : 0.0;
 }
@@ -297,28 +292,21 @@ LBM::uy(std::size_t local_x, std::size_t y) const
   for (int i = 0; i < Q; ++i) {
     const double fi = f_[i*N + cell_idx(local_x, y)];
     r += fi;
-    m += cy[i] * fi;
+    m += cy[i]*fi;
   }
   return (r > 0.0) ? m / r : 0.0;
 }
 
-// double
-// LBM::vorticity(std::size_t local_x, std::size_t y) const
-// {
-//   if (local_x == 0 || local_x == nx_local_+1 || y == 0 || y == ny_ - 1) return 0.0;
-//   return 0.5 * ((uy(local_x+1, y) - uy(local_x-1, y)) - (ux(local_x, y+1) - ux(local_x, y-1)));
-// }
-
 
 bool LBM::is_solid_global(std::size_t global_x, std::size_t y) const {
   // Check top and bottom walls
-  if (y == 0 || y == ny_ - 1) return true;
+  if (y == 0 || y == ny_-1) return true;
 
   // Check the (maximum two) stored cylinders
   for (const auto& cyl : cylinders_) {
     const double dx = double(global_x) - cyl.x;
     const double dy = double(y) - cyl.y;
-    if (dx * dx + dy * dy <= cyl.r * cyl.r) {
+    if (dx*dx + dy*dy <= cyl.r*cyl.r) {
       return true;
     }
   }
@@ -331,7 +319,7 @@ void
 LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux, 
                           std::vector<double>& g_uy, std::vector<double>& g_vor) const 
 {
-  // Extract strictly local fluid data into 1D contiguous buffers
+  // Extract local fluid data into 1D contiguous buffers
   std::vector<double> l_rho(nx_local_*ny_), l_ux(nx_local_*ny_), l_uy(nx_local_*ny_);
 
   for (std::size_t y = 0; y < ny_; ++y) {
@@ -343,15 +331,15 @@ LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux,
     }
   }
 
-  // Calculate the size (counts) and offset (displs) for every rank
+  // Prepare them to be sent (idea: have them all together in a single structure) : compute size and offset
   std::vector<int> counts(size_), displs(size_);
   for (int p = 0; p < size_; ++p) {
     int nx_loc = (nx_ / size_) + (p < int(nx_%size_) ? 1 : 0); // Same logic as nx_local_
-    counts[p] = nx_loc * ny_;
+    counts[p] = nx_loc*ny_;
     displs[p] = (p == 0) ? 0 : displs[p-1] + counts[p-1];
   }
 
-  // Allocate receive buffers ONLY on Rank 0
+  // Allocate receive buffers ONLY on rank == 0
   std::vector<double> recv_rho, recv_ux, recv_uy, recv_vor;
   if (rank_ == 0) {
     recv_rho.resize(nx_*ny_); 
@@ -364,7 +352,7 @@ LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux,
   MPI_Gatherv(l_ux.data(),  counts[rank_], MPI_DOUBLE, recv_ux.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
   MPI_Gatherv(l_uy.data(),  counts[rank_], MPI_DOUBLE, recv_uy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-  // Unpack the vertical data into a global grid (only on Rank 0).
+  // Unpack vertical data (non-trivial indexing) into global grid (only on Rank 0, with straightforward indexing).
   if (rank_ == 0) {
     g_rho.assign(nx_*ny_, 0.0);
     g_ux.assign(nx_*ny_, 0.0);
@@ -388,16 +376,16 @@ LBM::gather_local_results(std::vector<double>& g_rho, std::vector<double>& g_ux,
       }
     }
 
-    // Compute vorticity using continuous macroscopic arrays
+    // Compute vorticity globally, with the global rho, ux, uy structures
     for (std::size_t y = 0; y < ny_; ++y) {
       for (std::size_t x = 0; x < nx_; ++x) {
         std::size_t idx = y*nx_ + x;
         
-        if (x == 0 || x == nx_ - 1 || y == 0 || y == ny_ - 1) {
+        if (x == 0 || x == nx_-1 || y == 0 || y == ny_-1) {
           g_vor[idx] = 0.0;
         } else {
-          double uy_right = g_uy[idx+1]; // Right element (x --> x+1)
-          double uy_left  = g_uy[idx-1]; // Left element (x --> x-1)
+          double uy_right = g_uy[idx+1];   // Right element (x --> x+1)
+          double uy_left  = g_uy[idx-1];   // Left  element (x --> x-1)
           double ux_up    = g_ux[idx+nx_]; // Upper element (y --> y+1)
           double ux_down  = g_ux[idx-nx_]; // Lower element (y --> y-1)
             

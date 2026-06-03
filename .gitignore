@@ -3,9 +3,14 @@ EnvHPC/
 
 # Output results
 out/
+*.sh
+*.txt
 *.err
 *.job
 *.csv
+*.out
+*.data
+*/longRuns
 
 # Compiled codes and binaries
 *.o
