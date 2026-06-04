@@ -1,0 +1,29 @@
+# TODO[Davor]: confirm SCITAS module names. Suggested:
+#   module load gcc hdf5
+# HDF5_ROOT must point at an HDF5 install that provides include/ and lib/.
+
+CXX      := mpicxx
+LD       := $(CXX)
+
+HDF5_INC := $(if $(strip $(HDF5_ROOT)),-I$(HDF5_ROOT)/include)
+HDF5_LIB := $(if $(strip $(HDF5_ROOT)),-L$(HDF5_ROOT)/lib)
+CXXFLAGS += -O3 -g -Wall -Wextra -Werror -pedantic -std=c++11 -fopenmp $(HDF5_INC)
+LDFLAGS  += $(CXXFLAGS) $(HDF5_LIB) -lhdf5 -lm
+
+OBJS = main_MPI_OMP.o lbm_MPI_OMP.o output_MPI_OMP.o
+
+all: lbm_MPI_OMP
+
+lbm_MPI_OMP: $(OBJS)
+	$(LD) -o $@ $(OBJS) $(LDFLAGS)
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -f lbm_MPI_OMP *.o *~
+
+distclean: clean
+	rm -rf out/ probe.csv *.gif
+
+.PHONY: all clean distclean
