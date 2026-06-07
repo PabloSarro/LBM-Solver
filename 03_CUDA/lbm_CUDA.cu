@@ -6,17 +6,6 @@
 #include <cuda_runtime.h>
 #include <iostream>
 
-#define CUDA_CHECK(call) \
-  do { \
-    cudaError_t err = call; \
-    if (err != cudaSuccess) { \
-      std::cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ \
-                << " code=" << err << " \"" << cudaGetErrorString(err) \
-                << "\"" << std::endl; \
-      std::exit(EXIT_FAILURE); \
-    } \
-  } while (0)
-
 // D2Q9 lattice constants. Indexing convention used throughout:
 //   0: rest         5: NE
 //   1: E            6: NW
@@ -149,7 +138,7 @@ __global__ void lbm_boundaries_kernel(double* __restrict__ ftmp,
                                       const uint8_t* __restrict__ solid,
                                       int nx, int ny, double u_in) 
 {
-  int y = blockIdx.x*blockDim.x + threadIdx.x; // ==MISTAKE!!== : 1D Grid over Y-axis
+  int y = blockIdx.x*blockDim.x + threadIdx.x;
   if (y >= ny) return;
 
   int N = nx*ny;
@@ -227,12 +216,10 @@ void LBM::step() {
 
   // 1. Core Physics
   lbm_fused_kernel<<<blocks, threads>>>(f_d_, ftmp_d_, solid_d_, nx_, ny_, 1.0/tau_);
-  CUDA_CHECK(cudaGetLastError()); // Catches launch and execution failures
 
   // 2. Boundary Fixes (1D Kernel along Y)
   int blocks_y = (ny_ + 255) / 256;
   lbm_boundaries_kernel<<<blocks_y, 256>>>(ftmp_d_, solid_d_, nx_, ny_, u_in_);
-  CUDA_CHECK(cudaGetLastError()); // Catches launch and execution failures
 
   // 3. Pointer Swap (Zero overhead)
   std::swap(f_d_, ftmp_d_);
