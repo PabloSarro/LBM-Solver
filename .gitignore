@@ -9,6 +9,7 @@ out/
 *.job
 *.csv
 *.out
+*.gif
 *.data
 */longRuns
 
@@ -17,3 +18,7 @@ out/
 lbm
 lbm_MPI
 lbm_CUDA
+lbm_MPI_OMP
+
+# Helper Python scripts
+*.py
