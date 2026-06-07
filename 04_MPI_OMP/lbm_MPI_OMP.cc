@@ -113,25 +113,12 @@ LBM::initialize()
 // PERFORM A STEP IN THE SIMULATION.
 void LBM::step()
 {
-  // Spawn the thread pool ONCE per step
-  #pragma omp parallel 
-  {
-    collide();      // Threads share work inside via 'omp for'
-    bounce_back();  // Threads share work inside via 'omp for'
-
-    // ONLY ONE thread is allowed to talk to the network card
-    #pragma omp single
-    {
-      update_bounds(); 
-    } 
-    // An implicit barrier exists at the end of 'omp single'.
-    // No thread will proceed to stream() until the MPI transfer is 100% complete.
-
-    stream();       // Threads share work inside via 'omp for'
-
-    if (rank_ == 0) apply_inlet();
-    if (rank_ == size_-1) apply_outlet();
-  }
+  collide();
+  bounce_back();
+  update_bounds(); 
+  stream();
+  if (rank_ == 0) apply_inlet();
+  if (rank_ == size_-1) apply_outlet();
 }
 
 void
@@ -140,7 +127,7 @@ LBM::collide()
   const std::size_t N = (nx_local_+2) * ny_;
   const double inv_tau = 1.0 / tau_;
 
-  #pragma omp for collapse(2)
+  #pragma omp parallel for collapse(2)
   for (std::size_t y = 0; y < ny_; ++y) {
     for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) { // Only fluid cells!
       const std::size_t k = cell_idx(local_x, y);
@@ -169,7 +156,7 @@ LBM::bounce_back()
 {
   const std::size_t N = (nx_local_+2) * ny_;
 
-  #pragma omp for collapse(2)
+  #pragma omp parallel for collapse(2)
   for (std::size_t y = 0; y < ny_; ++y) {
     for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
       const std::size_t k = cell_idx(local_x, y);
@@ -224,7 +211,7 @@ LBM::stream()
 {
   const std::size_t N = (nx_local_+2) * ny_;
 
-  #pragma omp for collapse(2)
+  #pragma omp parallel for collapse(2)
   for (int i = 0; i < Q; ++i) {
     for (std::size_t y = 0; y < ny_; ++y) {
       for (std::size_t local_x = 1; local_x <= nx_local_; ++local_x) {
@@ -257,7 +244,7 @@ LBM::apply_inlet()
   const std::size_t N = (nx_local_+2) * ny_;
   const std::size_t x_first = 1;
 
-  #pragma omp for
+  #pragma omp parallel for
   for (std::size_t y = 0; y < ny_; ++y) {
     if (solid_[solid_idx(x_first, y)]) continue;
     const double rho = 1.0;
@@ -280,7 +267,7 @@ LBM::apply_outlet()
   const std::size_t x_last = nx_local_;
   const std::size_t x_sec_last = nx_local_-1;
 
-  #pragma omp for
+  #pragma omp parallel for
   for (std::size_t y = 0; y < ny_; ++y) {
     for (int i = 0; i < Q; ++i) {
       f_[i*N + cell_idx(x_last, y)] = f_[i*N + cell_idx(x_sec_last, y)];
